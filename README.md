@@ -157,6 +157,62 @@ Queries messages from the database.
 }
 ```
 
+## Importing gs-submissions exports
+
+The gs-submissions importer loads JSONL exports scraped from the Grey Swan Arena into this server's MongoDB database. Once imported, the `mongo_query_threads` and `mongo_query_messages` tools above work against your real submission history instead of hand-entered records.
+
+### Where the JSONL comes from
+
+Run `make arena-scrape` in the `ai_red_teaming` repository. It writes one file per arena under `arena/gs-scrape.local/`, named `{arena}_submissions.jsonl`, for example `hazard-hunt-q3_submissions.jsonl`. The files carry the full conversation for every submission, so the directory is git-ignored engagement evidence that stays on your machine.
+
+### Running the import
+
+File paths are positional, so let the shell expand them. `--mongo-uri` overrides the `MONGODB_URI` from `.env`, which defaults to `mongodb://localhost:27017/greyswan`.
+
+```bash
+npm run import:gs -- ../ai_red_teaming/arena/gs-scrape.local/hazard-hunt-q3_submissions.jsonl --mongo-uri mongodb://127.0.0.1:27017/greyswan
+```
+
+List more JSONL paths to import several arenas in one run. On success the importer prints a JSON summary (files, records, models and threads upserted, messages deleted and inserted, malformed lines skipped) and exits 0. It exits 1 on failure, including when no input path resolves to a file, when the connection fails, or when a record has no `model_name`. It exits 2 on bad flag usage, such as a missing `--mongo-uri` value or a non-positive `--batch-size`. `npm run import:gs -- --help` shows the full usage, and `--batch-size` tunes the write batch size (500 by default). Blank lines are skipped, and malformed lines are counted and logged to stderr without stopping the run.
+
+### Field mapping
+
+| gs-submissions field | Lands in | Mapping |
+|---|---|---|
+| `model_name` | `models` | Upserted by `{ name, provider: "Gray Swan" }`; a first insert sets `version` to `"unknown"` and `capabilities` to `[]` |
+| the submission record | `threads` | Upserted by `metadata.submissionId` (sparse unique index, synced at import) |
+| `behavior_name` | thread `title` and `challenges[0].name` | The title joins `behavior_name` and `model_name` with an em dash separator |
+| `behavior_criteria` | `challenges[0].description` | |
+| `behavior_type` | `challenges[0].category` | Falls back to `"arena"` when empty |
+| `attack_type` | `challenges[0].notes` | |
+| `status` | `challenges[0].severity` and `challenges[0].status` | `success` maps to `high` and `identified`; anything else maps to `low` and `unresolved` |
+| `submission_id`, `chat_id`, `arena`, `wave`, `behavior_type`, `attack_type`, `detail_url`, `scraped_at`, `status` | thread `metadata` | Stored under camelCase equivalents, plus `userId: "gs-submissions"` and `source: "gs-submissions@6128748"` |
+| `conversation[]` | `messages` | One document per entry: `role` and `content` pass through (defaults: `system`, empty string); `metadata.order` uses the entry's `order` field or its array index; `metadata.toolCallCount` and `metadata.reasoningBlockCount` record the lengths of `tool_calls` and `reasoning` |
+
+Re-running an import is safe. Models and threads are upserted rather than duplicated, and each submission's messages are fully resynced: the thread's existing messages are deleted, then re-inserted in batched writes.
+
+### Prerequisites
+
+- **Node.js 20 or newer.** Enforced by the `engines` field in `package.json`.
+- **Dependencies installed.** Run `npm install` once in this repository; the importer runs through `tsx` from `devDependencies`.
+- **A local MongoDB that already exists.** The importer connects to a running server; it doesn't install or start one. Confirm yours is reachable before importing:
+
+  ```bash
+  mongosh --quiet --eval "db.runCommand({ping:1}).ok"
+  ```
+
+  That should print `1`. If you don't have `mongosh`, an equivalent driver-level ping works too. For a throwaway local instance, Docker is the quickest fallback. The `mongo:8` image matches the mongoose 8.x driver this project uses:
+
+  ```bash
+  docker run --rm -d -p 27017:27017 --name greyswan-mongo mongo:8
+  ```
+
+- **The first `npm test` run downloads a MongoDB binary.** The test suite uses `mongodb-memory-server`, which fetches a matching `mongod` binary on first use and caches it locally. That binary serves tests only; the importer above still targets your own local server.
+
+### Handle the data carefully
+
+Imported documents contain the full text of jailbreak conversations. Keep them in your local MongoDB only. Never expose the database beyond loopback, share a dump, or copy these documents anywhere that leaves your machine.
+
 ## Workflow for Grey Swan Arena Challenges
 
 ### 1. Preparing for a Challenge
