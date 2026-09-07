@@ -342,3 +342,135 @@ describe('gs-submissions importer: 10k scale', () => {
     rmSync(dir, { recursive: true, force: true });
   }, 600_000);
 });
+
+describe('gs-submissions importer: panels-API records (mixed GS+API file)', () => {
+  it('imports both record kinds in one pass and re-runs idempotently with zero duplicates', async () => {
+    const modelsBefore = await Model.countDocuments();
+    const threadsBefore = await Thread.countDocuments();
+    const messagesBefore = await Message.countDocuments();
+
+    const first = await importGsSubmissions({
+      files: [fixture('mixed-sample.jsonl')],
+      mongoUri: uri,
+    });
+    expect(first.malformedSkipped).toBe(0);
+    expect(first.threadsUpserted).toBe(2);
+    expect(first.messagesInserted).toBe(5);
+    expect(await Model.countDocuments()).toBe(modelsBefore + 2);
+    expect(await Thread.countDocuments()).toBe(threadsBefore + 2);
+    expect(await Message.countDocuments()).toBe(messagesBefore + 5);
+
+    const apiThread = await Thread.findOne({
+      'metadata.submissionId': 'api-fixture-mixed-201',
+    });
+    expect(apiThread).not.toBeNull();
+    expect(apiThread!.title).toBe('data-exfiltration-probe — mixed-model-api');
+    expect(apiThread!.metadata.userId).toBe('gs-submissions');
+    expect(apiThread!.metadata.chatId).toBe('chat-mixed-201');
+    expect(apiThread!.metadata.status).toBe('success');
+    expect(apiThread!.metadata.arena).toBeUndefined();
+    expect(apiThread!.challenges).toHaveLength(1);
+    expect(apiThread!.challenges[0]).toMatchObject({
+      name: 'data-exfiltration-probe',
+      category: 'arena',
+      severity: 'high',
+      status: 'identified',
+    });
+    const apiMessages = await messageController.getMessagesByThreadId(String(apiThread!._id));
+    expect(apiMessages).toHaveLength(3);
+    expect(apiMessages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool']);
+    expect(apiMessages.map((m) => m.metadata.order)).toEqual([0, 1, 2]);
+    expect(apiMessages.map((m) => m.content)).toEqual([
+      'synthetic mixed api user prompt (inert)',
+      'synthetic mixed api assistant response (inert)',
+      'synthetic mixed api tool output (inert)',
+    ]);
+
+    const gsThread = await Thread.findOne({ 'metadata.submissionId': 'gs-fixture-mixed-001' });
+    expect(gsThread).not.toBeNull();
+    expect(gsThread!.metadata.source).toBe('gs-submissions@6128748');
+
+    // Idempotent re-run of the MIXED file: exact document counts unchanged.
+    const second = await importGsSubmissions({
+      files: [fixture('mixed-sample.jsonl')],
+      mongoUri: uri,
+    });
+    expect(second.threadsUpserted).toBe(2);
+    expect(second.messagesInserted).toBe(5);
+    expect(await Model.countDocuments()).toBe(modelsBefore + 2);
+    expect(await Thread.countDocuments()).toBe(threadsBefore + 2);
+    expect(await Message.countDocuments()).toBe(messagesBefore + 5);
+    const apiMessagesAfter = await messageController.getMessagesByThreadId(String(apiThread!._id));
+    expect(apiMessagesAfter).toHaveLength(3);
+  });
+});
+
+describe('gs-submissions importer: panels-API records (API-only file)', () => {
+  it('imports api-shaped records cleanly through the gs document path', async () => {
+    const modelsBefore = await Model.countDocuments();
+    const threadsBefore = await Thread.countDocuments();
+    const messagesBefore = await Message.countDocuments();
+
+    const summary = await importGsSubmissions({
+      files: [fixture('api-sample.jsonl')],
+      mongoUri: uri,
+    });
+    expect(summary.malformedSkipped).toBe(0);
+    expect(summary.modelsUpserted).toBe(2);
+    expect(summary.threadsUpserted).toBe(2);
+    expect(summary.messagesInserted).toBe(5);
+    expect(await Model.countDocuments()).toBe(modelsBefore + 2);
+    expect(await Thread.countDocuments()).toBe(threadsBefore + 2);
+    expect(await Message.countDocuments()).toBe(messagesBefore + 5);
+
+    const thread = await Thread.findOne({ 'metadata.submissionId': 'api-fixture-sub-101' });
+    expect(thread).not.toBeNull();
+    expect(thread!.title).toBe('system-prompt-extraction — api-model-a');
+    expect(thread!.metadata.chatId).toBe('chat-api-101');
+    expect(thread!.metadata.status).toBe('success');
+    const model = await Model.findById(thread!.modelId);
+    expect(model).not.toBeNull();
+    expect(model!.name).toBe('api-model-a');
+    expect(model!.provider).toBe('Gray Swan');
+    const messages = await messageController.getMessagesByThreadId(String(thread!._id));
+    expect(messages).toHaveLength(3);
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool']);
+    expect(messages[1].metadata.toolCallCount).toBe(0);
+    expect(messages[1].metadata.reasoningBlockCount).toBe(0);
+
+    // grading.is_break false maps to the low/unresolved challenge like a gs failure.
+    const thread2 = await Thread.findOne({ 'metadata.submissionId': 'api-fixture-sub-102' });
+    expect(thread2).not.toBeNull();
+    expect(thread2!.metadata.status).toBe('failure');
+    expect(thread2!.challenges[0]).toMatchObject({
+      name: 'data-exfiltration-probe',
+      severity: 'low',
+      status: 'unresolved',
+    });
+  });
+});
+
+describe('gs-submissions importer: panels-API malformed-line tolerance', () => {
+  it('skips malformed api lines with a warning and completes the import', async () => {
+    const threadsBefore = await Thread.countDocuments();
+    const messagesBefore = await Message.countDocuments();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const summary = await importGsSubmissions({
+      files: [fixture('api-malformed.jsonl')],
+      mongoUri: uri,
+    });
+
+    expect(summary.malformedSkipped).toBe(2);
+    expect(summary.threadsUpserted).toBe(2);
+    expect(summary.messagesInserted).toBe(3);
+    expect(await Thread.countDocuments()).toBe(threadsBefore + 2);
+    expect(await Message.countDocuments()).toBe(messagesBefore + 3);
+    expect(await Thread.findOne({ 'metadata.submissionId': 'api-fixture-mal-301' })).not.toBeNull();
+    expect(await Thread.findOne({ 'metadata.submissionId': 'api-fixture-mal-303' })).not.toBeNull();
+    expect(await Thread.findOne({ 'metadata.submissionId': 'api-fixture-mal-302' })).toBeNull();
+    const warned = errSpy.mock.calls.some((call) => String(call[0]).includes('malformed'));
+    expect(warned).toBe(true);
+    errSpy.mockRestore();
+  });
+});

@@ -37,6 +37,18 @@ export interface GsSubmissionRecord {
   scraped_at?: string;
 }
 
+// Shape of one Arena panels-API record (raw `{arena}_api_records.jsonl` line,
+// verified against the --api-export fetch in redteam/arena_scrape.py).
+export interface ApiPanelsRecord {
+  _id: string;
+  chat_id?: string;
+  behavior?: string;
+  model_id?: string;
+  created_at?: string;
+  grading?: { is_break?: boolean } | null;
+  messages?: Array<{ role?: string; content?: string }>;
+}
+
 export interface GsImportSummary {
   files: number;
   records: number;
@@ -60,6 +72,43 @@ function isRecord(value: unknown): value is GsSubmissionRecord {
     typeof (value as GsSubmissionRecord).submission_id === 'string' &&
     (value as GsSubmissionRecord).submission_id !== ''
   );
+}
+
+// A line is a panels-API record iff it carries both `_id` and `grading` keys
+// (same detection rule as the converter in ai_red_teaming/scripts/arena_capture.py).
+function looksLikeApiRecord(value: unknown): value is ApiPanelsRecord {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    '_id' in value &&
+    'grading' in value
+  );
+}
+
+function apiRecordToGs(record: ApiPanelsRecord): GsSubmissionRecord {
+  if (typeof record._id !== 'string' || record._id === '') {
+    throw new Error('api record has no usable _id');
+  }
+  const grading = (record.grading ?? {}) as { is_break?: unknown } | null;
+  if (grading !== null && typeof grading !== 'object') {
+    throw new Error('api record grading is not an object');
+  }
+  const messages = Array.isArray(record.messages) ? record.messages : [];
+  return {
+    submission_id: record._id,
+    chat_id: record.chat_id,
+    model_name: record.model_id,
+    behavior_name: record.behavior,
+    timestamp_raw: record.created_at,
+    status: grading?.is_break === true ? 'success' : 'failure',
+    conversation: messages.map((message, index) => ({
+      role: message?.role ?? 'system',
+      content: message?.content ?? '',
+      tool_calls: [],
+      reasoning: [],
+      order: index,
+    })),
+  };
 }
 
 async function upsertModel(
@@ -204,10 +253,14 @@ export async function importGsSubmissions(
       let record: GsSubmissionRecord;
       try {
         const parsed: unknown = JSON.parse(trimmed);
-        if (!isRecord(parsed)) {
-          throw new Error('line has no submission_id');
+        if (looksLikeApiRecord(parsed)) {
+          record = apiRecordToGs(parsed);
+        } else {
+          if (!isRecord(parsed)) {
+            throw new Error('line has no submission_id');
+          }
+          record = parsed;
         }
-        record = parsed;
       } catch (error) {
         summary.malformedSkipped += 1;
         const reason = error instanceof Error ? error.message : String(error);
