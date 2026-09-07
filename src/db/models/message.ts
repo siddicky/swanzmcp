@@ -3,12 +3,16 @@ import mongoose, { Document, Schema } from 'mongoose';
 // Interface for Message document
 export interface IMessage extends Document {
   threadId: mongoose.Types.ObjectId;
-  role: 'user' | 'assistant' | 'system';
+  // 'tool' carries gs-submissions tool-result turns (verified upstream MessageRole).
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   metadata: {
     tokenCount?: number;
     promptTokens?: number;
     completionTokens?: number;
+    order?: number;
+    toolCallCount?: number;
+    reasoningBlockCount?: number;
     toolCalls?: {
       name: string;
       arguments: Record<string, any>;
@@ -35,7 +39,7 @@ const MessageSchema = new Schema<IMessage>(
     },
     role: {
       type: String,
-      enum: ['user', 'assistant', 'system'],
+      enum: ['user', 'assistant', 'system', 'tool'],
       required: true,
       index: true,
     },
@@ -51,6 +55,15 @@ const MessageSchema = new Schema<IMessage>(
         type: Number,
       },
       completionTokens: {
+        type: Number,
+      },
+      order: {
+        type: Number,
+      },
+      toolCallCount: {
+        type: Number,
+      },
+      reasoningBlockCount: {
         type: Number,
       },
       toolCalls: [

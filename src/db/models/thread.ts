@@ -10,6 +10,16 @@ export interface IThread extends Document {
     tags: string[];
     context?: string;
     safetyScore?: number;
+    submissionId?: string;
+    chatId?: string;
+    arena?: string;
+    wave?: string;
+    behaviorType?: string;
+    attackType?: string;
+    detailUrl?: string;
+    scrapedAt?: string;
+    status?: string;
+    source?: string;
   };
   challenges: {
     name: string;
@@ -61,6 +71,36 @@ const ThreadSchema = new Schema<IThread>(
         min: 0,
         max: 10,
       },
+      submissionId: {
+        type: String,
+      },
+      chatId: {
+        type: String,
+      },
+      arena: {
+        type: String,
+      },
+      wave: {
+        type: String,
+      },
+      behaviorType: {
+        type: String,
+      },
+      attackType: {
+        type: String,
+      },
+      detailUrl: {
+        type: String,
+      },
+      scrapedAt: {
+        type: String,
+      },
+      status: {
+        type: String,
+      },
+      source: {
+        type: String,
+      },
     },
     challenges: [
       {
@@ -105,6 +145,9 @@ const ThreadSchema = new Schema<IThread>(
     timestamps: true,
   }
 );
+
+// sparse: mongo_thread-created threads have no submissionId and must not hit the unique constraint.
+ThreadSchema.index({ 'metadata.submissionId': 1 }, { unique: true, sparse: true });
 
 // Create and export the Thread model
 export const Thread = mongoose.model<IThread>('Thread', ThreadSchema); 
