@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
     "start": "node build/index.js",
-    "test": "vitest run"
+    "import:gs": "tsx src/bin/importGs.ts",
+    "test": "vitest run --exclude 'build/**'"
   },
   "engines": {
     "node": ">=20"
