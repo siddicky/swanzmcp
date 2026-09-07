@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
-    "start": "node build/index.js"
+    "start": "node build/index.js",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "bin": {
     "cursor-tools": "./build/index.js"
@@ -20,6 +24,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
-    "typescript": "^5.7.3"
+    "mongodb-memory-server": "10.1.4",
+    "tsx": "4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "3.2.4"
   }
 }
